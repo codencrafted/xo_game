@@ -19,11 +19,11 @@ import { textToSpeech } from "@/ai/flows/tts-flow";
 
 interface ChatProps {
     player: Player;
-    messages: ChatMessage[];
+    messages?: ChatMessage[];
     onSendMessage: (type: 'text' | 'voice', content: string) => void;
 }
 
-export function Chat({ player, messages, onSendMessage }: ChatProps) {
+export function Chat({ player, messages = [], onSendMessage }: ChatProps) {
     const [textMessage, setTextMessage] = useState("");
     const [isRecording, setIsRecording] = useState(false);
     const [currentTts, setCurrentTts] = useState<{ id: string; audio: HTMLAudioElement | null; isLoading: boolean }>({ id: '', audio: null, isLoading: false });
