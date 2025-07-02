@@ -58,7 +58,6 @@ export function useGame() {
   const router = useRouter();
   const { toast } = useToast();
 
-  // WebRTC state
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
@@ -66,24 +65,19 @@ export function useGame() {
   const [isMicMuted, setIsMicMuted] = useState(false);
   const iceCandidateBuffer = useRef<RTCIceCandidate[]>([]);
   
-  // Refs to avoid stale closures and unnecessary dependencies in callbacks/effects
   const playerRef = useRef(player);
   playerRef.current = player;
   const callStatusRef = useRef(callStatus);
   callStatusRef.current = callStatus;
-  const gameStateRef = useRef(gameState);
-  gameStateRef.current = gameState;
+  const gameStateRef = useRef<GameState | null>(null);
 
 
   useEffect(() => {
     const playerDataString = localStorage.getItem('tic-tac-toe-player');
-    if (!playerDataString) {
-      router.replace('/');
-      return;
-    }
-    const parsedPlayer = JSON.parse(playerDataString);
-    if (!playerRef.current || playerRef.current.symbol !== parsedPlayer.symbol) {
-        setPlayer(parsedPlayer);
+    if (playerDataString) {
+        setPlayer(JSON.parse(playerDataString));
+    } else {
+        router.replace('/');
     }
   }, [router]); 
 
@@ -106,15 +100,14 @@ export function useGame() {
     setIsMicMuted(false);
     iceCandidateBuffer.current = [];
 
-    const currentPlayer = playerRef.current;
-    if (!currentPlayer) return;
-
-    if (isInitiator && gameStateRef.current?.call) {
-        await setDoc(gameDocRef, { call: { ...gameStateRef.current.call, status: 'ended' } }, { merge: true });
+    const currentGameState = gameStateRef.current;
+    if (isInitiator && currentGameState?.call) {
+        await setDoc(gameDocRef, { call: { ...currentGameState.call, status: 'ended' } }, { merge: true });
         return;
     }
     
-    if (currentPlayer.symbol === 'X' && (!gameStateRef.current?.call || gameStateRef.current?.call.status === 'ended' || gameStateRef.current?.call.status === 'declined')) {
+    // Only master client 'X' should clean up the DB to avoid race conditions
+    if (playerRef.current?.symbol === 'X' && (!currentGameState?.call || currentGameState?.call.status === 'ended' || currentGameState?.call.status === 'declined')) {
         await setDoc(gameDocRef, { call: null }, { merge: true });
         const batch = writeBatch(db);
         const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
@@ -161,53 +154,70 @@ export function useGame() {
     if (!player) return;
 
     const unsubscribe = onSnapshot(gameDocRef, async (doc) => {
-      if (doc.exists()) {
-        const data = doc.data() as GameState;
-        gameStateRef.current = data;
-        setGameState(data);
-        
-        // Handle call state from Firestore
-        const callData = data.call;
-        const currentStatus = callStatusRef.current;
+        const oldGameState = gameStateRef.current; // Grab old state before any updates
 
-        if (callData) {
-            const { status, from, answer } = callData;
-            
-            if (status === 'ringing' && from !== player.symbol && currentStatus === 'idle') {
-                setCallStatus('ringing');
-                const otherPlayerName = data.players[from];
-                if (otherPlayerName) {
+        if (doc.exists()) {
+            const data = doc.data() as GameState;
+
+            // New chat message notification
+            if (oldGameState && data.chat && data.chat.length > (oldGameState.chat?.length || 0)) {
+                const newMessage = data.chat[data.chat.length - 1];
+                if (player && newMessage.senderSymbol !== player.symbol) {
                     toast({
-                        title: 'Incoming Call',
-                        description: `${otherPlayerName} is calling you.`,
+                        title: `New message from ${newMessage.senderName}`,
+                        description: newMessage.type === 'text' 
+                            ? (newMessage.content.length > 30 ? newMessage.content.substring(0, 30) + '...' : newMessage.content)
+                            : 'Sent a voice message.',
                     });
                 }
-            } else if (status === 'ringing' && from === player.symbol && currentStatus === 'idle') {
-                setCallStatus('dialing');
-            } else if (status === 'connected' && currentStatus !== 'connected') {
-                // If I am the original caller, I need to set the remote description with the answer.
-                if (from === player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
-                    await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-                    iceCandidateBuffer.current.forEach(candidate => {
-                        peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
-                    });
-                    iceCandidateBuffer.current = [];
+            }
+            
+            // Handle call state from Firestore
+            const callData = data.call;
+            const currentStatus = callStatusRef.current;
+
+            if (callData) {
+                const { status, from, answer } = callData;
+                
+                if (status === 'ringing' && from !== player.symbol && currentStatus === 'idle') {
+                    setCallStatus('ringing');
+                    const otherPlayerName = data.players[from];
+                    if (otherPlayerName) {
+                        toast({
+                            title: 'Incoming Call',
+                            description: `${otherPlayerName} is calling you.`,
+                        });
+                    }
+                } else if (status === 'ringing' && from === player.symbol && currentStatus === 'idle') {
+                    setCallStatus('dialing');
+                } else if (status === 'connected' && currentStatus !== 'connected') {
+                    if (from === player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+                        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+                        iceCandidateBuffer.current.forEach(candidate => {
+                            peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
+                        });
+                        iceCandidateBuffer.current = [];
+                    }
+                    setCallStatus('connected');
+                } else if ((status === 'declined' || status === 'ended') && currentStatus !== 'idle') {
+                    cleanupCall(false);
                 }
-                setCallStatus('connected');
-            } else if ((status === 'declined' || status === 'ended') && currentStatus !== 'idle') {
+            } else if (currentStatus !== 'idle') {
                 cleanupCall(false);
             }
-        } else if (currentStatus !== 'idle') {
-            cleanupCall(false);
-        }
+            
+            // Update state and ref AFTER all comparisons and logic
+            setGameState(data);
+            gameStateRef.current = data;
 
-      } else {
-        if(player.symbol === 'X') {
-            await setDoc(gameDocRef, initialGameState);
+        } else {
+            if(player.symbol === 'X') {
+                await setDoc(gameDocRef, initialGameState);
+            }
+            setGameState(initialGameState);
+            gameStateRef.current = initialGameState;
         }
-        setGameState(initialGameState);
-      }
-      setLoading(false);
+        setLoading(false);
     });
 
     return () => unsubscribe();
@@ -220,7 +230,7 @@ export function useGame() {
                 const gameDoc = await getDoc(gameDocRef);
                 if (gameDoc.exists()) {
                     const currentGameState = gameDoc.data() as GameState;
-                    if (currentGameState?.winner) { // Check again before writing
+                    if (currentGameState?.winner) {
                         const { players, score, chat, call } = currentGameState;
                         await setDoc(gameDocRef, {
                             ...initialGameState,
@@ -231,7 +241,7 @@ export function useGame() {
                         });
                     }
                 }
-            }, 4000); // 4 seconds delay to show win/loss message
+            }, 4000);
 
             return () => clearTimeout(timer);
         }
@@ -289,8 +299,7 @@ export function useGame() {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    const callData: CallData = { ...gameStateRef.current!.call!, answer, status: 'connected' };
-    await setDoc(gameDocRef, { call: callData }, { merge: true });
+    await setDoc(gameDocRef, { call: { ...gameStateRef.current!.call!, answer, status: 'connected' } }, { merge: true });
   }, [setupPeerConnection]);
   
   const endCall = useCallback(async () => {

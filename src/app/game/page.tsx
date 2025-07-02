@@ -72,6 +72,8 @@ export default function GamePage() {
         </div>
         <div className="w-full max-w-md lg:max-w-sm h-[70vh] md:h-[calc(100vh-2rem)] flex flex-col gap-2">
             <CallManager 
+                player={player}
+                players={gameState.players}
                 callStatus={callStatus}
                 startCall={startCall}
                 answerCall={answerCall}
