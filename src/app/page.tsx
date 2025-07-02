@@ -25,6 +25,7 @@ const initialGameState: GameState = {
   players: { X: null, O: null },
   winner: null,
   restartRequested: { X: false, O: false },
+  chat: [],
 };
 
 export default function LoginPage() {

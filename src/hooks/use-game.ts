@@ -1,11 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
-import { doc, onSnapshot, setDoc, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, getDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 import { db } from '@/lib/firebase';
-import type { Player, GameState, Symbol, Winner } from '@/types';
+import type { Player, GameState, Symbol, Winner, ChatMessage } from '@/types';
 
 const gameId = 'main-game';
 const gameDocRef = doc(db, 'games', gameId);
@@ -22,6 +22,7 @@ const initialGameState: GameState = {
   players: { X: null, O: null },
   winner: null,
   restartRequested: { X: false, O: false },
+  chat: [],
 };
 
 function checkWinner(board: (Symbol | null)[]): Winner {
@@ -49,25 +50,23 @@ export function useGame() {
       router.replace('/');
       return;
     }
-    setPlayer(JSON.parse(playerDataString));
+    const currentPlayer = JSON.parse(playerDataString);
+    setPlayer(currentPlayer);
 
     const unsubscribe = onSnapshot(gameDocRef, async (doc) => {
       if (doc.exists()) {
         const data = doc.data() as GameState;
         setGameState(data);
         
-        // Handle auto-restart
         if (data.restartRequested.X && data.restartRequested.O) {
-            if(player?.symbol === 'X') { // Only player X resets the game
+            if(currentPlayer?.symbol === 'X') {
                 await setDoc(gameDocRef, {
                     ...initialGameState,
-                    players: data.players // Keep players
+                    players: data.players
                 });
             }
         }
-
       } else {
-        // This case should ideally be handled by the login page
         await setDoc(gameDocRef, initialGameState);
         setGameState(initialGameState);
       }
@@ -75,7 +74,7 @@ export function useGame() {
     });
 
     return () => unsubscribe();
-  }, [router, player?.symbol]);
+  }, [router]);
 
   const handleMove = useCallback(async (index: number) => {
     if (!gameState || !player || gameState.winner) return;
@@ -98,5 +97,24 @@ export function useGame() {
     await setDoc(gameDocRef, { restartRequested: newRestartRequested }, { merge: true });
   }, [gameState, player]);
 
-  return { player, gameState, loading, handleMove, requestRestart };
+  const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
+    if (!player) return;
+    
+    const newMessage: Omit<ChatMessage, 'timestamp' | 'id'> = {
+        senderName: player.name,
+        senderSymbol: player.symbol,
+        type,
+        content,
+    };
+
+    await setDoc(gameDocRef, {
+        chat: arrayUnion({
+            ...newMessage,
+            id: new Date().toISOString(), // Simple unique ID
+            timestamp: serverTimestamp(),
+        })
+    }, { merge: true });
+  }, [player]);
+
+  return { player, gameState, loading, handleMove, requestRestart, sendMessage };
 }
