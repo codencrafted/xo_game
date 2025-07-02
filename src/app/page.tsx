@@ -15,7 +15,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Toaster } from "@/components/ui/toaster";
 
 const validCodes: Record<string, Omit<Player, "id">> = {
-  "2402": { name: "Preet", symbol: "X" },
+  "2402": { name: "Preet ❤️", symbol: "X" },
   "1009": { name: "Prince", symbol: "O" },
 };
 
@@ -88,7 +88,7 @@ export default function LoginPage() {
       }
 
       const newPlayers = { ...gameState.players, [playerData.symbol]: playerData.name };
-      await setDoc(gameDocRef, { players: newPlayers }, { merge: true });
+      await setDoc(gameDocRef, { players: newPlayers, score: gameState.score || { X: 0, O: 0 } }, { merge: true });
 
       localStorage.setItem("tic-tac-toe-player", JSON.stringify(playerData));
       router.push("/game");
