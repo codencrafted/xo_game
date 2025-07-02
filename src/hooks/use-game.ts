@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -209,7 +208,7 @@ export function useGame() {
     
     const otherPlayerSymbol = player.symbol === 'X' ? 'O' : 'X';
     const remoteCandidatesCol = collection(db, 'games', gameId, `iceCandidates${otherPlayerSymbol}`);
-    const unsubscribe = onCollectionSnapshot(remoteCandidatesCol, (snapshot) => {
+    const unsubscribe = onSnapshot(remoteCandidatesCol, (snapshot) => {
         snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
                 const candidate = new RTCIceCandidate(change.doc.data());
