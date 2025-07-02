@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -415,7 +416,7 @@ export function useGame() {
             ...currentScore,
             [winner.symbol]: (currentScore[winner.symbol] || 0) + 1,
         };
-        if (newScore[winner.symbol] >= 10) {
+        if (newScore[winner.symbol] >= 15) {
             matchWinner = winner.symbol;
         }
     }
