@@ -9,6 +9,7 @@ import { useRouter } from 'next/navigation';
 
 import { db } from '@/lib/firebase';
 import type { Player, GameState, Symbol, Winner, ChatMessage, CallData } from '@/types';
+import { useToast } from './use-toast';
 
 const gameId = 'main-game';
 const gameDocRef = doc(db, 'games', gameId);
@@ -54,6 +55,7 @@ export function useGame() {
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const { toast } = useToast();
 
   // WebRTC state
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
@@ -172,10 +174,17 @@ export function useGame() {
             
             if (status === 'ringing' && from !== player.symbol && currentStatus === 'idle') {
                 setCallStatus('ringing');
+                const otherPlayerName = data.players[from];
+                if (otherPlayerName) {
+                    toast({
+                        title: 'Incoming Call',
+                        description: `${otherPlayerName} is calling you.`,
+                    });
+                }
             } else if (status === 'ringing' && from === player.symbol && currentStatus === 'idle') {
                 setCallStatus('dialing');
             } else if (status === 'connected' && currentStatus !== 'connected') {
-                if (from === player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+                if (from !== player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
                     await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
                     iceCandidateBuffer.current.forEach(candidate => {
                         peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
@@ -200,7 +209,7 @@ export function useGame() {
     });
 
     return () => unsubscribe();
-  }, [player, cleanupCall]);
+  }, [player, cleanupCall, toast]);
 
   // Listen for remote ICE candidates
   useEffect(() => {
