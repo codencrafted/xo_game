@@ -4,7 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { 
   doc, onSnapshot, setDoc, getDoc, arrayUnion, Timestamp,
-  collection, addDoc, onSnapshot as onCollectionSnapshot, writeBatch, getDocs,
+  collection, addDoc, writeBatch, getDocs,
 } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
@@ -65,6 +65,8 @@ export function useGame() {
   const iceCandidateBuffer = useRef<RTCIceCandidate[]>([]);
   
   // Refs to avoid stale closures and unnecessary dependencies in callbacks/effects
+  const playerRef = useRef(player);
+  playerRef.current = player;
   const callStatusRef = useRef(callStatus);
   callStatusRef.current = callStatus;
   const gameStateRef = useRef(gameState);
@@ -78,11 +80,10 @@ export function useGame() {
       return;
     }
     const parsedPlayer = JSON.parse(playerDataString);
-    if (!player || player.symbol !== parsedPlayer.symbol) {
-      setPlayer(parsedPlayer);
+    if (!playerRef.current || playerRef.current.symbol !== parsedPlayer.symbol) {
+        setPlayer(parsedPlayer);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); 
+  }, [router]); 
 
 
   const toggleMic = useCallback(() => {
@@ -93,7 +94,7 @@ export function useGame() {
     setIsMicMuted((prev) => !prev);
   }, []);
 
-  const cleanupCall = useCallback(async (notifyFirestore: boolean) => {
+  const cleanupCall = useCallback(async (isInitiator: boolean) => {
     peerConnectionRef.current?.close();
     localStreamRef.current?.getTracks().forEach(track => track.stop());
     peerConnectionRef.current = null;
@@ -103,7 +104,15 @@ export function useGame() {
     setIsMicMuted(false);
     iceCandidateBuffer.current = [];
 
-    if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
+    const currentPlayer = playerRef.current;
+    if (!currentPlayer) return;
+
+    if (isInitiator && gameStateRef.current?.call) {
+        await setDoc(gameDocRef, { call: { ...gameStateRef.current.call, status: 'ended' } }, { merge: true });
+        return;
+    }
+    
+    if (currentPlayer.symbol === 'X' && (!gameStateRef.current?.call || gameStateRef.current?.call.status === 'ended')) {
         await setDoc(gameDocRef, { call: null }, { merge: true });
         const batch = writeBatch(db);
         const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
@@ -112,26 +121,24 @@ export function useGame() {
         candidatesOSnap.forEach(doc => batch.delete(doc.ref));
         await batch.commit();
     }
-  }, [player]);
+  }, []);
 
   const setupPeerConnection = useCallback(async () => {
-    if (peerConnectionRef.current || !player) return peerConnectionRef.current;
+    const currentPlayer = playerRef.current;
+    if (peerConnectionRef.current || !currentPlayer) return peerConnectionRef.current;
     
     const pc = new RTCPeerConnection(iceServers);
     peerConnectionRef.current = pc;
 
-    // Get local media
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
     localStreamRef.current = stream;
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
 
-    // Handle remote stream
     pc.ontrack = (event) => {
         setRemoteStream(event.streams[0]);
     };
 
-    // Handle ICE candidates
-    const localCandidatesCol = collection(db, 'games', gameId, `iceCandidates${player.symbol}`);
+    const localCandidatesCol = collection(db, 'games', gameId, `iceCandidates${currentPlayer.symbol}`);
     pc.onicecandidate = (event) => {
         if (event.candidate) {
             addDoc(localCandidatesCol, event.candidate.toJSON());
@@ -139,7 +146,7 @@ export function useGame() {
     };
     
     return pc;
-  }, [player]);
+  }, []);
 
   // Main game state listener
   useEffect(() => {
@@ -148,6 +155,7 @@ export function useGame() {
     const unsubscribe = onSnapshot(gameDocRef, async (doc) => {
       if (doc.exists()) {
         const data = doc.data() as GameState;
+        gameStateRef.current = data;
         setGameState(data);
         
         if (data.restartRequested.X && data.restartRequested.O) {
@@ -157,31 +165,36 @@ export function useGame() {
         }
         
         // Handle call state from Firestore
-        if (data.call) {
-          const { status, from, answer } = data.call;
-          if (status === 'ringing' && from !== player.symbol && callStatusRef.current !== 'ringing') {
-            setCallStatus('ringing');
-          } else if (status === 'ringing' && from === player.symbol && callStatusRef.current !== 'dialing') {
-            setCallStatus('dialing');
-          } else if (status === 'connected' && callStatusRef.current !== 'connected') {
-            setCallStatus('connected');
-            if (answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
-              await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-              // Process any buffered ICE candidates
-              iceCandidateBuffer.current.forEach(candidate => {
-                peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
-              });
-              iceCandidateBuffer.current = []; // Clear buffer
+        const callData = data.call;
+        const currentStatus = callStatusRef.current;
+
+        if (callData) {
+            const { status, from, answer } = callData;
+            
+            if (status === 'ringing' && from !== player.symbol && currentStatus === 'idle') {
+                setCallStatus('ringing');
+            } else if (status === 'ringing' && from === player.symbol && currentStatus === 'idle') {
+                setCallStatus('dialing');
+            } else if (status === 'connected' && currentStatus !== 'connected') {
+                if (from === player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+                    await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+                    iceCandidateBuffer.current.forEach(candidate => {
+                        peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
+                    });
+                    iceCandidateBuffer.current = [];
+                }
+                setCallStatus('connected');
+            } else if ((status === 'declined' || status === 'ended') && currentStatus !== 'idle') {
+                cleanupCall(false);
             }
-          } else if (status === 'declined' || status === 'ended') {
-            if(callStatusRef.current !== 'idle') cleanupCall(false);
-          }
-        } else {
-            if(callStatusRef.current !== 'idle') cleanupCall(false);
+        } else if (currentStatus !== 'idle') {
+            cleanupCall(false);
         }
 
       } else {
-        await setDoc(gameDocRef, initialGameState);
+        if(player.symbol === 'X') {
+            await setDoc(gameDocRef, initialGameState);
+        }
         setGameState(initialGameState);
       }
       setLoading(false);
@@ -212,78 +225,79 @@ export function useGame() {
   }, [player]);
 
   const startCall = useCallback(async () => {
-    if (!player) return;
+    const currentPlayer = playerRef.current;
+    if (!currentPlayer) return;
     setIsMicMuted(false);
     const pc = await setupPeerConnection();
     if (!pc) return;
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
-    const callData: CallData = { from: player.symbol, offer, status: 'ringing' };
+    const callData: CallData = { from: currentPlayer.symbol, offer, status: 'ringing' };
     await setDoc(gameDocRef, { call: callData }, { merge: true });
-  }, [player, setupPeerConnection]);
+  }, [setupPeerConnection]);
 
   const answerCall = useCallback(async () => {
-    if (!gameStateRef.current?.call?.offer || !player) return;
+    const callOffer = gameStateRef.current?.call?.offer;
+    const currentPlayer = playerRef.current;
+    if (!callOffer || !currentPlayer) return;
+    
     setIsMicMuted(false);
     const pc = await setupPeerConnection();
     if (!pc) return;
     
-    await pc.setRemoteDescription(new RTCSessionDescription(gameStateRef.current.call.offer));
-    // Process any buffered ICE candidates
+    await pc.setRemoteDescription(new RTCSessionDescription(callOffer));
+    
     iceCandidateBuffer.current.forEach(candidate => {
       pc.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
     });
-    iceCandidateBuffer.current = []; // Clear buffer
+    iceCandidateBuffer.current = [];
 
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    const callData: CallData = { ...gameStateRef.current.call, answer, status: 'connected' };
+    const callData: CallData = { ...gameStateRef.current!.call!, answer, status: 'connected' };
     await setDoc(gameDocRef, { call: callData }, { merge: true });
-  }, [player, setupPeerConnection]);
+  }, [setupPeerConnection]);
   
   const endCall = useCallback(async () => {
       await cleanupCall(true);
   }, [cleanupCall]);
   
   const declineCall = useCallback(async () => {
-      if (!gameStateRef.current?.call) return;
-      const callData: CallData = { ...gameStateRef.current.call, status: 'declined' };
+      const currentCall = gameStateRef.current?.call;
+      if (!currentCall) return;
+      const callData: CallData = { ...currentCall, status: 'declined' };
       await setDoc(gameDocRef, { call: callData }, { merge: true });
-      setTimeout(() => { // Allow declined state to sync
-        if (player?.symbol === gameStateRef.current?.call?.from) {
-          endCall();
-        }
-      }, 1500);
-  }, [player, endCall]);
+  }, []);
 
   const handleMove = useCallback(async (index: number) => {
-    if (!gameStateRef.current || !player || gameStateRef.current.winner) return;
-    if (gameStateRef.current.board[index] !== null || gameStateRef.current.turn !== player.symbol) return;
+    if (!gameStateRef.current || !playerRef.current || gameStateRef.current.winner) return;
+    if (gameStateRef.current.board[index] !== null || gameStateRef.current.turn !== playerRef.current.symbol) return;
 
     const newBoard = [...gameStateRef.current.board];
-    newBoard[index] = player.symbol;
+    newBoard[index] = playerRef.current.symbol;
     const winner = checkWinner(newBoard);
 
     await setDoc(gameDocRef, {
       board: newBoard,
-      turn: player.symbol === 'X' ? 'O' : 'X',
+      turn: playerRef.current.symbol === 'X' ? 'O' : 'X',
       winner: winner,
     }, { merge: true });
-  }, [player]);
+  }, []);
 
   const requestRestart = useCallback(async () => {
-    if (!gameStateRef.current || !player) return;
-    const newRestartRequested = { ...gameStateRef.current.restartRequested, [player.symbol]: true };
+    if (!gameStateRef.current || !playerRef.current) return;
+    const newRestartRequested = { ...gameStateRef.current.restartRequested, [playerRef.current.symbol]: true };
     await setDoc(gameDocRef, { restartRequested: newRestartRequested }, { merge: true });
-  }, [player]);
+  }, []);
 
   const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
-    if (!player) return;
+    const currentPlayer = playerRef.current;
+    if (!currentPlayer) return;
     
     const newMessage: Omit<ChatMessage, 'id' | 'timestamp'> = {
-        senderName: player.name,
-        senderSymbol: player.symbol,
+        senderName: currentPlayer.name,
+        senderSymbol: currentPlayer.symbol,
         type,
         content,
     };
@@ -295,7 +309,7 @@ export function useGame() {
             timestamp: Timestamp.now(),
         })
     }, { merge: true });
-  }, [player]);
+  }, []);
 
   return { player, gameState, loading, handleMove, requestRestart, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic };
 }
