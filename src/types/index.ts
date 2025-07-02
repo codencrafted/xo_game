@@ -27,7 +27,7 @@ export type CallData = {
     from: Symbol;
     offer: any; // RTCSessionDescriptionInit
     answer?: any; // RTCSessionDescriptionInit
-    status: 'dialing' | 'ringing' | 'connected' | 'declined' | 'ended';
+    status: 'ringing' | 'connected' | 'declined' | 'ended';
 };
 
 export interface GameState {

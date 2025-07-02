@@ -61,6 +61,7 @@ export function useGame() {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [callStatus, setCallStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected'>('idle');
   const [isMicMuted, setIsMicMuted] = useState(false);
+  const iceCandidateBuffer = useRef<RTCIceCandidate[]>([]);
 
   const toggleMic = useCallback(() => {
     if (!localStreamRef.current) return;
@@ -97,6 +98,27 @@ export function useGame() {
     return pc;
   }, [player]);
 
+  const cleanupCall = useCallback(async (notifyFirestore: boolean) => {
+    peerConnectionRef.current?.close();
+    localStreamRef.current?.getTracks().forEach(track => track.stop());
+    peerConnectionRef.current = null;
+    localStreamRef.current = null;
+    setRemoteStream(null);
+    setCallStatus('idle');
+    setIsMicMuted(false);
+    iceCandidateBuffer.current = [];
+
+    if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
+        await setDoc(gameDocRef, { call: null }, { merge: true });
+        const batch = writeBatch(db);
+        const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
+        candidatesXSnap.forEach(doc => batch.delete(doc.ref));
+        const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
+        candidatesOSnap.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+    }
+  }, [player]);
+
   // Main game state listener
   useEffect(() => {
     const playerDataString = localStorage.getItem('tic-tac-toe-player');
@@ -129,6 +151,11 @@ export function useGame() {
             setCallStatus('connected');
             if (answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
               await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+              // Process any buffered ICE candidates
+              iceCandidateBuffer.current.forEach(candidate => {
+                peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
+              });
+              iceCandidateBuffer.current = []; // Clear buffer
             }
           } else if (status === 'declined' || status === 'ended') {
             if(callStatus !== 'idle') cleanupCall(false);
@@ -145,42 +172,27 @@ export function useGame() {
     });
 
     return () => unsubscribe();
-  }, [router, callStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [router, callStatus, cleanupCall]);
 
   // Listen for remote ICE candidates
   useEffect(() => {
-    if (!peerConnectionRef.current || !player) return;
+    if (!player) return;
+    
     const otherPlayerSymbol = player.symbol === 'X' ? 'O' : 'X';
     const remoteCandidatesCol = collection(db, 'games', gameId, `iceCandidates${otherPlayerSymbol}`);
     const unsubscribe = onCollectionSnapshot(remoteCandidatesCol, (snapshot) => {
         snapshot.docChanges().forEach((change) => {
             if (change.type === 'added') {
                 const candidate = new RTCIceCandidate(change.doc.data());
-                peerConnectionRef.current?.addIceCandidate(candidate);
+                if (peerConnectionRef.current?.remoteDescription) {
+                    peerConnectionRef.current.addIceCandidate(candidate).catch(e => console.error("Error adding ICE candidate:", e));
+                } else {
+                    iceCandidateBuffer.current.push(candidate);
+                }
             }
         });
     });
     return unsubscribe;
-  }, [player]);
-
-  const cleanupCall = useCallback(async (notifyFirestore: boolean) => {
-    peerConnectionRef.current?.close();
-    localStreamRef.current?.getTracks().forEach(track => track.stop());
-    peerConnectionRef.current = null;
-    localStreamRef.current = null;
-    setRemoteStream(null);
-    setCallStatus('idle');
-    setIsMicMuted(false);
-
-    if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
-        await setDoc(gameDocRef, { call: null }, { merge: true });
-        const batch = writeBatch(db);
-        const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
-        candidatesXSnap.forEach(doc => batch.delete(doc.ref));
-        const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
-        candidatesOSnap.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-    }
   }, [player]);
 
   const startCall = useCallback(async () => {
@@ -201,6 +213,12 @@ export function useGame() {
     if (!pc) return;
     
     await pc.setRemoteDescription(new RTCSessionDescription(gameState.call.offer));
+    // Process any buffered ICE candidates
+    iceCandidateBuffer.current.forEach(candidate => {
+      pc.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
+    });
+    iceCandidateBuffer.current = []; // Clear buffer
+
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
@@ -247,7 +265,7 @@ export function useGame() {
   const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
     if (!player) return;
     
-    const newMessage: Omit<ChatMessage, 'timestamp' | 'id'> = {
+    const newMessage: Omit<ChatMessage, 'id'> = {
         senderName: player.name,
         senderSymbol: player.symbol,
         type,
