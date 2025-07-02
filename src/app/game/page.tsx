@@ -9,6 +9,8 @@ import { RestartDialog } from "@/components/game/RestartDialog";
 import { Chat } from "@/components/game/Chat";
 import { Toaster } from "@/components/ui/toaster";
 import { CallManager } from "@/components/game/CallManager";
+import { Button } from "@/components/ui/button";
+import { LogOut } from "lucide-react";
 
 export default function GamePage() {
   const { 
@@ -24,7 +26,8 @@ export default function GamePage() {
     declineCall,
     endCall,
     isMicMuted,
-    toggleMic
+    toggleMic,
+    leaveGame
   } = useGame();
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
@@ -69,6 +72,10 @@ export default function GamePage() {
                 disabled={gameState.turn !== player.symbol || !!gameState.winner}
                 winningCombo={typeof gameState.winner === 'object' && gameState.winner?.combo}
             />
+            <Button onClick={leaveGame} variant="outline" className="w-full mt-4">
+                <LogOut className="mr-2 h-4 w-4" />
+                Leave Game
+            </Button>
         </div>
         <div className="w-full max-w-md lg:max-w-sm h-[70vh] md:h-[calc(100vh-2rem)] flex flex-col gap-2">
             <CallManager 

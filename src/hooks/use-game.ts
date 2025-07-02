@@ -152,6 +152,7 @@ export function useGame() {
     const playerDataString = localStorage.getItem('tic-tac-toe-player');
     if (!playerDataString) {
         router.replace('/');
+        setLoading(false);
         return;
     }
     const storedPlayer = JSON.parse(playerDataString);
@@ -182,20 +183,21 @@ export function useGame() {
 
     const currentGameState = gameStateRef.current;
     if (isInitiator && currentGameState?.call) {
-        await setDoc(gameDocRef, { call: { ...currentGameState.call, status: 'ended' } }, { merge: true });
+        await setDoc(gameDocRef, { call: null }, { merge: true });
     } else if (playerRef.current?.symbol === 'X') {
         const callStillExists = (await getDoc(gameDocRef)).data()?.call;
         if (callStillExists) {
             await setDoc(gameDocRef, { call: null }, { merge: true });
         }
-        const batch = writeBatch(db);
-        const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
-        candidatesXSnap.forEach(doc => batch.delete(doc.ref));
-        const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
-        candidatesOSnap.forEach(doc => batch.delete(doc.ref));
-        if (!candidatesXSnap.empty || !candidatesOSnap.empty) {
-            await batch.commit();
-        }
+    }
+    
+    const batch = writeBatch(db);
+    const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
+    candidatesXSnap.forEach(doc => batch.delete(doc.ref));
+    const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
+    candidatesOSnap.forEach(doc => batch.delete(doc.ref));
+    if (!candidatesXSnap.empty || !candidatesOSnap.empty) {
+        await batch.commit();
     }
   }, [stopRingtone]);
 
@@ -246,6 +248,7 @@ export function useGame() {
       
       const data = doc.data() as GameState;
       const oldGameState = gameStateRef.current;
+      const currentStatus = callStatusRef.current;
 
       // New chat message notification
       if (oldGameState && data.chat && data.chat.length > (oldGameState.chat?.length || 0)) {
@@ -261,7 +264,6 @@ export function useGame() {
       }
       
       const callData = data.call;
-      const currentStatus = callStatusRef.current;
 
       if (callData) {
         const { status, from, answer } = callData;
@@ -277,9 +279,9 @@ export function useGame() {
         } else if (status === 'ringing' && !isReceiver && currentStatus === 'idle') {
           setCallStatus('dialing');
         } else if (status === 'connected' && currentStatus !== 'connected') {
-          if (!isReceiver && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
-            await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
-          }
+            if (!isReceiver && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+                await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+              }
           setCallStatus('connected');
         } else if ((status === 'declined' || status === 'ended') && currentStatus !== 'idle') {
           await cleanupCall(false);
@@ -438,5 +440,42 @@ export function useGame() {
     }, { merge: true });
   }, []);
 
-  return { player, gameState, loading, handleMove, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic };
+  const leaveGame = useCallback(async () => {
+    setLoading(true);
+    const currentPlayer = playerRef.current;
+    if (!currentPlayer) {
+        router.push('/');
+        return;
+    }
+
+    await cleanupCall(true);
+
+    const gameDoc = await getDoc(gameDocRef);
+    if (gameDoc.exists()) {
+        const currentGameState = gameDoc.data() as GameState;
+        const newPlayers = { ...currentGameState.players };
+        newPlayers[currentPlayer.symbol] = null;
+        
+        const otherSymbol = currentPlayer.symbol === 'X' ? 'O' : 'X';
+        const otherPlayerExists = !!newPlayers[otherSymbol];
+
+        if (!otherPlayerExists) {
+            await setDoc(gameDocRef, initialGameState);
+        } else {
+            await setDoc(gameDocRef, {
+                players: newPlayers,
+                board: initialGameState.board,
+                turn: initialGameState.turn,
+                winner: initialGameState.winner,
+                restartRequested: initialGameState.restartRequested,
+                call: null,
+            }, { merge: true });
+        }
+    }
+
+    localStorage.removeItem('tic-tac-toe-player');
+    router.push('/');
+  }, [router, cleanupCall]);
+
+  return { player, gameState, loading, handleMove, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic, leaveGame };
 }
