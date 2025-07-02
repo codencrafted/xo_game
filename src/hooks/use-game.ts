@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from 'react';
-import { doc, onSnapshot, setDoc, getDoc, arrayUnion, serverTimestamp } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, getDoc, arrayUnion, Timestamp } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 import { db } from '@/lib/firebase';
@@ -111,7 +111,7 @@ export function useGame() {
         chat: arrayUnion({
             ...newMessage,
             id: new Date().toISOString(), // Simple unique ID
-            timestamp: serverTimestamp(),
+            timestamp: Timestamp.now(),
         })
     }, { merge: true });
   }, [player]);
