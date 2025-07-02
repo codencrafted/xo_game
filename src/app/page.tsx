@@ -56,35 +56,35 @@ export default function LoginPage() {
       let gameState: GameState;
 
       if (!gameDoc.exists()) {
-        await setDoc(gameDocRef, initialGameState);
         gameState = initialGameState;
+        await setDoc(gameDocRef, initialGameState);
       } else {
         gameState = gameDoc.data() as GameState;
       }
 
-      const playerSlot = gameState.players[playerData.symbol];
-      const otherPlayerSlot = gameState.players[playerData.symbol === "X" ? "O" : "X"];
+      const playersInGame = Object.values(gameState.players).filter(p => p !== null);
+      const isGameFull = playersInGame.length === 2;
+      const isPlayerInGame = playersInGame.includes(playerData.name);
 
-      if (playerSlot && playerSlot !== playerData.name) {
+      if (isGameFull && !isPlayerInGame) {
+          toast({
+              title: "Game Full",
+              description: "Two players are already in the game.",
+              variant: "destructive",
+          });
+          setLoading(false);
+          return;
+      }
+
+      const intendedSlotOccupant = gameState.players[playerData.symbol];
+      if (intendedSlotOccupant && intendedSlotOccupant !== playerData.name) {
         toast({
           title: "Player Slot Taken",
-          description: `The slot for player ${playerData.symbol} is already taken by ${playerSlot}.`,
+          description: `The slot for player ${playerData.symbol} is already taken by ${intendedSlotOccupant}.`,
           variant: "destructive",
         });
         setLoading(false);
         return;
-      }
-      
-      if (playerSlot !== playerData.name && otherPlayerSlot && Object.values(gameState.players).every(p => p !== null)) {
-         if (!Object.values(gameState.players).includes(playerData.name)) {
-            toast({
-                title: "Game Full",
-                description: "Two players are already in the game.",
-                variant: "destructive",
-            });
-            setLoading(false);
-            return;
-         }
       }
 
       const newPlayers = { ...gameState.players, [playerData.symbol]: playerData.name };
