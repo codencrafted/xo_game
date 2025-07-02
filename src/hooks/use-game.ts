@@ -114,7 +114,7 @@ export function useGame() {
         return;
     }
     
-    if (currentPlayer.symbol === 'X' && (!gameStateRef.current?.call || gameStateRef.current?.call.status === 'ended')) {
+    if (currentPlayer.symbol === 'X' && (!gameStateRef.current?.call || gameStateRef.current?.call.status === 'ended' || gameStateRef.current?.call.status === 'declined')) {
         await setDoc(gameDocRef, { call: null }, { merge: true });
         const batch = writeBatch(db);
         const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
@@ -132,9 +132,15 @@ export function useGame() {
     const pc = new RTCPeerConnection(iceServers);
     peerConnectionRef.current = pc;
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-    localStreamRef.current = stream;
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      localStreamRef.current = stream;
+      stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    } catch (error) {
+      console.error("Error getting user media", error);
+      toast({ title: "Microphone Access Denied", description: "Please allow microphone access to use voice chat.", variant: "destructive" });
+      return null;
+    }
 
     pc.ontrack = (event) => {
         setRemoteStream(event.streams[0]);
@@ -148,7 +154,7 @@ export function useGame() {
     };
     
     return pc;
-  }, []);
+  }, [toast]);
 
   // Main game state listener
   useEffect(() => {
@@ -179,7 +185,8 @@ export function useGame() {
             } else if (status === 'ringing' && from === player.symbol && currentStatus === 'idle') {
                 setCallStatus('dialing');
             } else if (status === 'connected' && currentStatus !== 'connected') {
-                if (from !== player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+                // If I am the original caller, I need to set the remote description with the answer.
+                if (from === player.symbol && answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
                     await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
                     iceCandidateBuffer.current.forEach(candidate => {
                         peerConnectionRef.current?.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
@@ -214,12 +221,13 @@ export function useGame() {
                 if (gameDoc.exists()) {
                     const currentGameState = gameDoc.data() as GameState;
                     if (currentGameState?.winner) { // Check again before writing
+                        const { players, score, chat, call } = currentGameState;
                         await setDoc(gameDocRef, {
                             ...initialGameState,
-                            players: currentGameState.players,
-                            score: currentGameState.score || { X: 0, O: 0 },
-                            chat: currentGameState.chat,
-                            call: currentGameState.call,
+                            players,
+                            score: score || { X: 0, O: 0 },
+                            chat: chat || [],
+                            call: call || null,
                         });
                     }
                 }
@@ -247,7 +255,7 @@ export function useGame() {
             }
         });
     });
-    return unsubscribe;
+    return () => unsubscribe();
   }, [player]);
 
   const startCall = useCallback(async () => {
@@ -294,17 +302,20 @@ export function useGame() {
       if (!currentCall) return;
       const callData: CallData = { ...currentCall, status: 'declined' };
       await setDoc(gameDocRef, { call: callData }, { merge: true });
-  }, []);
+      cleanupCall(false);
+  }, [cleanupCall]);
 
   const handleMove = useCallback(async (index: number) => {
-    if (!gameStateRef.current || !playerRef.current || gameStateRef.current.winner) return;
-    if (gameStateRef.current.board[index] !== null || gameStateRef.current.turn !== playerRef.current.symbol) return;
+    const currentState = gameStateRef.current;
+    const currentPlayer = playerRef.current;
+    if (!currentState || !currentPlayer || currentState.winner) return;
+    if (currentState.board[index] !== null || currentState.turn !== currentPlayer.symbol) return;
 
-    const newBoard = [...gameStateRef.current.board];
-    newBoard[index] = playerRef.current.symbol;
+    const newBoard = [...currentState.board];
+    newBoard[index] = currentPlayer.symbol;
     const winner = checkWinner(newBoard);
 
-    const currentScore = gameStateRef.current.score || { X: 0, O: 0 };
+    const currentScore = currentState.score || { X: 0, O: 0 };
     let newScore = currentScore;
     if (winner && typeof winner === 'object') {
         newScore = {
@@ -315,7 +326,7 @@ export function useGame() {
 
     await setDoc(gameDocRef, {
       board: newBoard,
-      turn: playerRef.current.symbol === 'X' ? 'O' : 'X',
+      turn: currentPlayer.symbol === 'X' ? 'O' : 'X',
       winner: winner,
       score: newScore,
     }, { merge: true });
@@ -325,19 +336,17 @@ export function useGame() {
     const currentPlayer = playerRef.current;
     if (!currentPlayer) return;
     
-    const newMessage: Omit<ChatMessage, 'id' | 'timestamp'> = {
+    const newMessage: ChatMessage = {
+        id: new Date().toISOString() + Math.random(),
         senderName: currentPlayer.name,
         senderSymbol: currentPlayer.symbol,
         type,
         content,
+        timestamp: Timestamp.now(),
     };
 
     await setDoc(gameDocRef, {
-        chat: arrayUnion({
-            ...newMessage,
-            id: new Date().toISOString() + Math.random(),
-            timestamp: Timestamp.now(),
-        })
+        chat: arrayUnion(newMessage)
     }, { merge: true });
   }, []);
 
