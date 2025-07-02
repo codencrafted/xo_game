@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useGame } from "@/hooks/use-game";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Board } from "@/components/game/Board";
@@ -23,15 +23,19 @@ export default function GamePage() {
     startCall,
     answerCall,
     declineCall,
-    endCall
+    endCall,
+    isMicMuted,
+    toggleMic
   } = useGame();
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
 
   useEffect(() => {
-    if (remoteStream && remoteAudioRef.current) {
+    if (remoteAudioRef.current) {
         remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.muted = isSpeakerMuted;
     }
-  }, [remoteStream]);
+  }, [remoteStream, isSpeakerMuted]);
 
 
   if (loading || !gameState || !player) {
@@ -74,6 +78,10 @@ export default function GamePage() {
                 answerCall={answerCall}
                 declineCall={declineCall}
                 endCall={endCall}
+                isMicMuted={isMicMuted}
+                isSpeakerMuted={isSpeakerMuted}
+                onToggleMic={toggleMic}
+                onToggleSpeaker={() => setIsSpeakerMuted(prev => !prev)}
             />
             <Chat 
                 player={player}

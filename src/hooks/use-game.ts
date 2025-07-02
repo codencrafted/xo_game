@@ -60,6 +60,15 @@ export function useGame() {
   const localStreamRef = useRef<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [callStatus, setCallStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected'>('idle');
+  const [isMicMuted, setIsMicMuted] = useState(false);
+
+  const toggleMic = useCallback(() => {
+    if (!localStreamRef.current) return;
+    localStreamRef.current.getAudioTracks().forEach((track) => {
+        track.enabled = !track.enabled;
+    });
+    setIsMicMuted((prev) => !prev);
+  }, []);
 
   const setupPeerConnection = useCallback(async () => {
     if (peerConnectionRef.current || !player) return peerConnectionRef.current;
@@ -161,6 +170,7 @@ export function useGame() {
     localStreamRef.current = null;
     setRemoteStream(null);
     setCallStatus('idle');
+    setIsMicMuted(false);
 
     if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
         await setDoc(gameDocRef, { call: null }, { merge: true });
@@ -175,6 +185,7 @@ export function useGame() {
 
   const startCall = useCallback(async () => {
     if (!player) return;
+    setIsMicMuted(false);
     const pc = await setupPeerConnection();
     if (!pc) return;
     const offer = await pc.createOffer();
@@ -185,6 +196,7 @@ export function useGame() {
 
   const answerCall = useCallback(async () => {
     if (!gameState?.call?.offer || !player) return;
+    setIsMicMuted(false);
     const pc = await setupPeerConnection();
     if (!pc) return;
     
@@ -251,5 +263,5 @@ export function useGame() {
     }, { merge: true });
   }, [player]);
 
-  return { player, gameState, loading, handleMove, requestRestart, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall };
+  return { player, gameState, loading, handleMove, requestRestart, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic };
 }
