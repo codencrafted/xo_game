@@ -11,6 +11,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { CallManager } from "@/components/game/CallManager";
 import { Button } from "@/components/ui/button";
 import { LogOut } from "lucide-react";
+import { MatchWinnerDialog } from "@/components/game/MatchWinnerDialog";
 
 export default function GamePage() {
   const { 
@@ -27,7 +28,8 @@ export default function GamePage() {
     endCall,
     isMicMuted,
     toggleMic,
-    leaveGame
+    leaveGame,
+    resetMatch,
   } = useGame();
   const remoteAudioRef = useRef<HTMLAudioElement>(null);
   const [isSpeakerMuted, setIsSpeakerMuted] = useState(false);
@@ -69,7 +71,7 @@ export default function GamePage() {
             <Board 
                 board={gameState.board} 
                 onMove={handleMove}
-                disabled={gameState.turn !== player.symbol || !!gameState.winner}
+                disabled={!!gameState.winner || !!gameState.matchWinner}
                 winningCombo={typeof gameState.winner === 'object' && gameState.winner?.combo}
             />
             <Button onClick={leaveGame} variant="outline" className="w-full mt-4">
@@ -97,10 +99,17 @@ export default function GamePage() {
                 onSendMessage={sendMessage}
             />
         </div>
-        <RestartDialog
-          winner={gameState.winner}
-          player={player}
-          players={gameState.players}
+        {!gameState.matchWinner && (
+          <RestartDialog
+            winner={gameState.winner}
+            player={player}
+            players={gameState.players}
+          />
+        )}
+        <MatchWinnerDialog 
+            gameState={gameState}
+            player={player}
+            onPlayAgain={resetMatch}
         />
       </main>
       <Toaster />

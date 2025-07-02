@@ -29,6 +29,7 @@ const initialGameState: GameState = {
   chat: [],
   call: null,
   score: { X: 0, O: 0 },
+  matchWinner: null,
 };
 
 const iceServers = {
@@ -299,7 +300,7 @@ export function useGame() {
 
     // Auto-restart effect
     useEffect(() => {
-      if (gameState?.winner && player?.symbol === 'X') {
+      if (gameState?.winner && !gameState.matchWinner && player?.symbol === 'X') {
         const timer = setTimeout(async () => {
             const gameDoc = await getDoc(gameDocRef);
             if (!gameDoc.exists()) return;
@@ -321,7 +322,7 @@ export function useGame() {
 
         return () => clearTimeout(timer);
       }
-    }, [gameState?.winner, player?.symbol]);
+    }, [gameState?.winner, gameState?.matchWinner, player?.symbol]);
 
   // Listen for remote ICE candidates
   useEffect(() => {
@@ -407,11 +408,16 @@ export function useGame() {
 
     const currentScore = currentState.score || { X: 0, O: 0 };
     let newScore = currentScore;
+    let matchWinner: Symbol | null = currentState.matchWinner || null;
+
     if (winner && typeof winner === 'object') {
         newScore = {
             ...currentScore,
             [winner.symbol]: (currentScore[winner.symbol] || 0) + 1,
         };
+        if (newScore[winner.symbol] >= 10) {
+            matchWinner = winner.symbol;
+        }
     }
 
     await setDoc(gameDocRef, {
@@ -419,7 +425,21 @@ export function useGame() {
       turn: currentPlayer.symbol === 'X' ? 'O' : 'X',
       winner: winner,
       score: newScore,
+      matchWinner: matchWinner,
     }, { merge: true });
+  }, []);
+
+  const resetMatch = useCallback(async () => {
+    const gameDoc = await getDoc(gameDocRef);
+    if (gameDoc.exists()) {
+        const currentGameState = gameDoc.data() as GameState;
+        await setDoc(gameDocRef, {
+            ...initialGameState,
+            players: currentGameState.players,
+            chat: currentGameState.chat,
+            call: null,
+        });
+    }
   }, []);
 
   const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
@@ -469,6 +489,7 @@ export function useGame() {
                 winner: initialGameState.winner,
                 restartRequested: initialGameState.restartRequested,
                 call: null,
+                matchWinner: null,
             }, { merge: true });
         }
     }
@@ -477,5 +498,5 @@ export function useGame() {
     router.push('/');
   }, [router, cleanupCall]);
 
-  return { player, gameState, loading, handleMove, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic, leaveGame };
+  return { player, gameState, loading, handleMove, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic, leaveGame, resetMatch };
 }

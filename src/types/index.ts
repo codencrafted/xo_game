@@ -39,4 +39,5 @@ export interface GameState {
   chat: ChatMessage[];
   call?: CallData | null;
   score: { [key in Symbol]: number };
+  matchWinner: Symbol | null;
 }
