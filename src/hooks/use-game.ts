@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from 'react';
@@ -62,6 +63,18 @@ export function useGame() {
   const [callStatus, setCallStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected'>('idle');
   const [isMicMuted, setIsMicMuted] = useState(false);
   const iceCandidateBuffer = useRef<RTCIceCandidate[]>([]);
+  const callStatusRef = useRef(callStatus);
+  callStatusRef.current = callStatus;
+
+  useEffect(() => {
+    const playerDataString = localStorage.getItem('tic-tac-toe-player');
+    if (!playerDataString) {
+      router.replace('/');
+      return;
+    }
+    setPlayer(JSON.parse(playerDataString));
+  }, [router]);
+
 
   const toggleMic = useCallback(() => {
     if (!localStreamRef.current) return;
@@ -70,6 +83,27 @@ export function useGame() {
     });
     setIsMicMuted((prev) => !prev);
   }, []);
+
+  const cleanupCall = useCallback(async (notifyFirestore: boolean) => {
+    peerConnectionRef.current?.close();
+    localStreamRef.current?.getTracks().forEach(track => track.stop());
+    peerConnectionRef.current = null;
+    localStreamRef.current = null;
+    setRemoteStream(null);
+    setCallStatus('idle');
+    setIsMicMuted(false);
+    iceCandidateBuffer.current = [];
+
+    if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
+        await setDoc(gameDocRef, { call: null }, { merge: true });
+        const batch = writeBatch(db);
+        const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
+        candidatesXSnap.forEach(doc => batch.delete(doc.ref));
+        const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
+        candidatesOSnap.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+    }
+  }, [player]);
 
   const setupPeerConnection = useCallback(async () => {
     if (peerConnectionRef.current || !player) return peerConnectionRef.current;
@@ -98,36 +132,9 @@ export function useGame() {
     return pc;
   }, [player]);
 
-  const cleanupCall = useCallback(async (notifyFirestore: boolean) => {
-    peerConnectionRef.current?.close();
-    localStreamRef.current?.getTracks().forEach(track => track.stop());
-    peerConnectionRef.current = null;
-    localStreamRef.current = null;
-    setRemoteStream(null);
-    setCallStatus('idle');
-    setIsMicMuted(false);
-    iceCandidateBuffer.current = [];
-
-    if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
-        await setDoc(gameDocRef, { call: null }, { merge: true });
-        const batch = writeBatch(db);
-        const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
-        candidatesXSnap.forEach(doc => batch.delete(doc.ref));
-        const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
-        candidatesOSnap.forEach(doc => batch.delete(doc.ref));
-        await batch.commit();
-    }
-  }, [player]);
-
   // Main game state listener
   useEffect(() => {
-    const playerDataString = localStorage.getItem('tic-tac-toe-player');
-    if (!playerDataString) {
-      router.replace('/');
-      return;
-    }
-    const currentPlayer = JSON.parse(playerDataString);
-    setPlayer(currentPlayer);
+    if (!player) return;
 
     const unsubscribe = onSnapshot(gameDocRef, async (doc) => {
       if (doc.exists()) {
@@ -135,7 +142,7 @@ export function useGame() {
         setGameState(data);
         
         if (data.restartRequested.X && data.restartRequested.O) {
-            if(currentPlayer?.symbol === 'X') {
+            if(player.symbol === 'X') {
                 await setDoc(gameDocRef, { ...initialGameState, players: data.players });
             }
         }
@@ -143,9 +150,9 @@ export function useGame() {
         // Handle call state from Firestore
         if (data.call) {
           const { status, from, answer } = data.call;
-          if (status === 'ringing' && from !== currentPlayer.symbol) {
+          if (status === 'ringing' && from !== player.symbol) {
             setCallStatus('ringing');
-          } else if (status === 'ringing' && from === currentPlayer.symbol) {
+          } else if (status === 'ringing' && from === player.symbol) {
             setCallStatus('dialing');
           } else if (status === 'connected') {
             setCallStatus('connected');
@@ -158,10 +165,10 @@ export function useGame() {
               iceCandidateBuffer.current = []; // Clear buffer
             }
           } else if (status === 'declined' || status === 'ended') {
-            if(callStatus !== 'idle') cleanupCall(false);
+            if(callStatusRef.current !== 'idle') cleanupCall(false);
           }
         } else {
-            if(callStatus !== 'idle') cleanupCall(false);
+            if(callStatusRef.current !== 'idle') cleanupCall(false);
         }
 
       } else {
@@ -172,7 +179,7 @@ export function useGame() {
     });
 
     return () => unsubscribe();
-  }, [router, callStatus, cleanupCall]);
+  }, [player, cleanupCall]);
 
   // Listen for remote ICE candidates
   useEffect(() => {
@@ -265,7 +272,7 @@ export function useGame() {
   const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
     if (!player) return;
     
-    const newMessage: Omit<ChatMessage, 'id'> = {
+    const newMessage: Omit<ChatMessage, 'id' | 'timestamp'> = {
         senderName: player.name,
         senderSymbol: player.symbol,
         type,
