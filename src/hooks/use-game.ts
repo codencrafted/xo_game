@@ -28,6 +28,7 @@ const initialGameState: GameState = {
   restartRequested: { X: false, O: false },
   chat: [],
   call: null,
+  score: { X: 0, O: 0 },
 };
 
 const iceServers = {
@@ -159,12 +160,6 @@ export function useGame() {
         gameStateRef.current = data;
         setGameState(data);
         
-        if (data.restartRequested.X && data.restartRequested.O) {
-            if(player.symbol === 'X') {
-                await setDoc(gameDocRef, { ...initialGameState, players: data.players });
-            }
-        }
-        
         // Handle call state from Firestore
         const callData = data.call;
         const currentStatus = callStatusRef.current;
@@ -210,6 +205,29 @@ export function useGame() {
 
     return () => unsubscribe();
   }, [player, cleanupCall, toast]);
+
+    // Auto-restart effect
+    useEffect(() => {
+        if (gameState?.winner && player?.symbol === 'X') {
+            const timer = setTimeout(async () => {
+                const gameDoc = await getDoc(gameDocRef);
+                if (gameDoc.exists()) {
+                    const currentGameState = gameDoc.data() as GameState;
+                    if (currentGameState?.winner) { // Check again before writing
+                        await setDoc(gameDocRef, {
+                            ...initialGameState,
+                            players: currentGameState.players,
+                            score: currentGameState.score, // This is key
+                            chat: currentGameState.chat,
+                            call: currentGameState.call,
+                        });
+                    }
+                }
+            }, 4000); // 4 seconds delay to show win/loss message
+
+            return () => clearTimeout(timer);
+        }
+    }, [gameState?.winner, player?.symbol]);
 
   // Listen for remote ICE candidates
   useEffect(() => {
@@ -286,17 +304,20 @@ export function useGame() {
     newBoard[index] = playerRef.current.symbol;
     const winner = checkWinner(newBoard);
 
+    let newScore = gameStateRef.current.score;
+    if (winner && typeof winner === 'object') {
+        newScore = {
+            ...newScore,
+            [winner.symbol]: (newScore[winner.symbol] || 0) + 1,
+        };
+    }
+
     await setDoc(gameDocRef, {
       board: newBoard,
       turn: playerRef.current.symbol === 'X' ? 'O' : 'X',
       winner: winner,
+      score: newScore,
     }, { merge: true });
-  }, []);
-
-  const requestRestart = useCallback(async () => {
-    if (!gameStateRef.current || !playerRef.current) return;
-    const newRestartRequested = { ...gameStateRef.current.restartRequested, [playerRef.current.symbol]: true };
-    await setDoc(gameDocRef, { restartRequested: newRestartRequested }, { merge: true });
   }, []);
 
   const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
@@ -319,5 +340,5 @@ export function useGame() {
     }, { merge: true });
   }, []);
 
-  return { player, gameState, loading, handleMove, requestRestart, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic };
+  return { player, gameState, loading, handleMove, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall, isMicMuted, toggleMic };
 }

@@ -2,7 +2,6 @@
 
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogContent,
   AlertDialogDescription,
   AlertDialogHeader,
@@ -14,10 +13,9 @@ interface RestartDialogProps {
   winner: Winner;
   player: Player;
   players: GameState['players'];
-  onRestart: () => void;
 }
 
-export function RestartDialog({ winner, player, players, onRestart }: RestartDialogProps) {
+export function RestartDialog({ winner, player, players }: RestartDialogProps) {
   if (!winner) {
     return null;
   }
@@ -27,7 +25,7 @@ export function RestartDialog({ winner, player, players, onRestart }: RestartDia
 
   if (winner === "draw") {
     title = "It's a Draw!";
-    description = "A hard-fought battle with no victor. Care for a rematch?";
+    description = "A hard-fought battle with no victor. The next round will begin shortly.";
   } else {
     const winnerName = players[winner.symbol];
     if (winner.symbol === player.symbol) {
@@ -50,9 +48,6 @@ export function RestartDialog({ winner, player, players, onRestart }: RestartDia
             {description}
           </AlertDialogDescription>
         </AlertDialogHeader>
-        <AlertDialogAction onClick={onRestart} className="w-full font-bold">
-          Play Again
-        </AlertDialogAction>
       </AlertDialogContent>
     </AlertDialog>
   );

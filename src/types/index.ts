@@ -38,4 +38,5 @@ export interface GameState {
   restartRequested: { [key in Symbol]: boolean };
   chat: ChatMessage[];
   call?: CallData | null;
+  score: { [key in Symbol]: number };
 }

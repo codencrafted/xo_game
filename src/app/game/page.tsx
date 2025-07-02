@@ -16,7 +16,6 @@ export default function GamePage() {
     gameState, 
     loading, 
     handleMove, 
-    requestRestart, 
     sendMessage,
     callStatus,
     remoteStream,
@@ -92,7 +91,6 @@ export default function GamePage() {
         <RestartDialog
           winner={gameState.winner}
           player={player}
-          onRestart={requestRestart}
           players={gameState.players}
         />
       </main>

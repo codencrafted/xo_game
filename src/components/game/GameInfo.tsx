@@ -11,7 +11,7 @@ interface GameInfoProps {
 }
 
 export function GameInfo({ gameState }: GameInfoProps) {
-  const { turn, players, winner } = gameState;
+  const { turn, players, winner, score } = gameState;
 
   let statusText;
   if (winner) {
@@ -27,11 +27,12 @@ export function GameInfo({ gameState }: GameInfoProps) {
   const PlayerDisplay = ({ symbol }: { symbol: "X" | "O" }) => (
     <div
       className={cn(
-        "flex flex-col items-center gap-2 p-4 rounded-lg transition-all duration-300 w-32",
+        "flex flex-col items-center gap-2 p-4 rounded-lg transition-all duration-300 w-36",
         turn === symbol && !winner ? "bg-primary/10 scale-105" : "bg-primary/5 opacity-75"
       )}
     >
       <span className="font-bold text-lg">{players[symbol] || `Player ${symbol}`}</span>
+      <span className="text-sm font-medium text-muted-foreground">Score: {score?.[symbol] ?? 0}</span>
       {symbol === "X" ? <IconX className="w-8 h-8 text-primary" /> : <IconO className="w-8 h-8 text-accent" />}
     </div>
   );
