@@ -59,12 +59,13 @@ export default function LoginPage() {
         gameState = initialGameState;
         await setDoc(gameDocRef, initialGameState);
       } else {
-        gameState = gameDoc.data() as GameState;
+        const data = gameDoc.data() as GameState;
+        gameState = { ...initialGameState, ...data };
       }
 
       const playersInGame = Object.values(gameState.players).filter(p => p !== null);
       const isGameFull = playersInGame.length === 2;
-      const isPlayerInGame = playersInGame.includes(playerData.name);
+      const isPlayerInGame = playersInGame.some(p => p === playerData.name);
 
       if (isGameFull && !isPlayerInGame) {
           toast({
