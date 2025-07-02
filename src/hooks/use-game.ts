@@ -63,8 +63,13 @@ export function useGame() {
   const [callStatus, setCallStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected'>('idle');
   const [isMicMuted, setIsMicMuted] = useState(false);
   const iceCandidateBuffer = useRef<RTCIceCandidate[]>([]);
+  
+  // Refs to avoid stale closures and unnecessary dependencies in callbacks/effects
   const callStatusRef = useRef(callStatus);
   callStatusRef.current = callStatus;
+  const gameStateRef = useRef(gameState);
+  gameStateRef.current = gameState;
+
 
   useEffect(() => {
     const playerDataString = localStorage.getItem('tic-tac-toe-player');
@@ -72,8 +77,12 @@ export function useGame() {
       router.replace('/');
       return;
     }
-    setPlayer(JSON.parse(playerDataString));
-  }, [router]);
+    const parsedPlayer = JSON.parse(playerDataString);
+    if (!player || player.symbol !== parsedPlayer.symbol) {
+      setPlayer(parsedPlayer);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); 
 
 
   const toggleMic = useCallback(() => {
@@ -150,11 +159,11 @@ export function useGame() {
         // Handle call state from Firestore
         if (data.call) {
           const { status, from, answer } = data.call;
-          if (status === 'ringing' && from !== player.symbol) {
+          if (status === 'ringing' && from !== player.symbol && callStatusRef.current !== 'ringing') {
             setCallStatus('ringing');
-          } else if (status === 'ringing' && from === player.symbol) {
+          } else if (status === 'ringing' && from === player.symbol && callStatusRef.current !== 'dialing') {
             setCallStatus('dialing');
-          } else if (status === 'connected') {
+          } else if (status === 'connected' && callStatusRef.current !== 'connected') {
             setCallStatus('connected');
             if (answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
               await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
@@ -214,12 +223,12 @@ export function useGame() {
   }, [player, setupPeerConnection]);
 
   const answerCall = useCallback(async () => {
-    if (!gameState?.call?.offer || !player) return;
+    if (!gameStateRef.current?.call?.offer || !player) return;
     setIsMicMuted(false);
     const pc = await setupPeerConnection();
     if (!pc) return;
     
-    await pc.setRemoteDescription(new RTCSessionDescription(gameState.call.offer));
+    await pc.setRemoteDescription(new RTCSessionDescription(gameStateRef.current.call.offer));
     // Process any buffered ICE candidates
     iceCandidateBuffer.current.forEach(candidate => {
       pc.addIceCandidate(candidate).catch(e => console.error("Error adding buffered ICE candidate", e));
@@ -229,30 +238,30 @@ export function useGame() {
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
 
-    const callData: CallData = { ...gameState.call, answer, status: 'connected' };
+    const callData: CallData = { ...gameStateRef.current.call, answer, status: 'connected' };
     await setDoc(gameDocRef, { call: callData }, { merge: true });
-  }, [gameState, player, setupPeerConnection]);
+  }, [player, setupPeerConnection]);
   
   const endCall = useCallback(async () => {
       await cleanupCall(true);
   }, [cleanupCall]);
   
   const declineCall = useCallback(async () => {
-      if (!gameState?.call) return;
-      const callData: CallData = { ...gameState.call, status: 'declined' };
+      if (!gameStateRef.current?.call) return;
+      const callData: CallData = { ...gameStateRef.current.call, status: 'declined' };
       await setDoc(gameDocRef, { call: callData }, { merge: true });
       setTimeout(() => { // Allow declined state to sync
-        if (player?.symbol === gameState.call?.from) {
+        if (player?.symbol === gameStateRef.current?.call?.from) {
           endCall();
         }
       }, 1500);
-  }, [gameState, player, endCall]);
+  }, [player, endCall]);
 
   const handleMove = useCallback(async (index: number) => {
-    if (!gameState || !player || gameState.winner) return;
-    if (gameState.board[index] !== null || gameState.turn !== player.symbol) return;
+    if (!gameStateRef.current || !player || gameStateRef.current.winner) return;
+    if (gameStateRef.current.board[index] !== null || gameStateRef.current.turn !== player.symbol) return;
 
-    const newBoard = [...gameState.board];
+    const newBoard = [...gameStateRef.current.board];
     newBoard[index] = player.symbol;
     const winner = checkWinner(newBoard);
 
@@ -261,13 +270,13 @@ export function useGame() {
       turn: player.symbol === 'X' ? 'O' : 'X',
       winner: winner,
     }, { merge: true });
-  }, [gameState, player]);
+  }, [player]);
 
   const requestRestart = useCallback(async () => {
-    if (!gameState || !player) return;
-    const newRestartRequested = { ...gameState.restartRequested, [player.symbol]: true };
+    if (!gameStateRef.current || !player) return;
+    const newRestartRequested = { ...gameStateRef.current.restartRequested, [player.symbol]: true };
     await setDoc(gameDocRef, { restartRequested: newRestartRequested }, { merge: true });
-  }, [gameState, player]);
+  }, [player]);
 
   const sendMessage = useCallback(async (type: 'text' | 'voice', content: string) => {
     if (!player) return;
