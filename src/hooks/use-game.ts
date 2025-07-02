@@ -217,7 +217,7 @@ export function useGame() {
                         await setDoc(gameDocRef, {
                             ...initialGameState,
                             players: currentGameState.players,
-                            score: currentGameState.score, // This is key
+                            score: currentGameState.score || { X: 0, O: 0 },
                             chat: currentGameState.chat,
                             call: currentGameState.call,
                         });
@@ -304,11 +304,12 @@ export function useGame() {
     newBoard[index] = playerRef.current.symbol;
     const winner = checkWinner(newBoard);
 
-    let newScore = gameStateRef.current.score;
+    const currentScore = gameStateRef.current.score || { X: 0, O: 0 };
+    let newScore = currentScore;
     if (winner && typeof winner === 'object') {
         newScore = {
-            ...newScore,
-            [winner.symbol]: (newScore[winner.symbol] || 0) + 1,
+            ...currentScore,
+            [winner.symbol]: (currentScore[winner.symbol] || 0) + 1,
         };
     }
 
