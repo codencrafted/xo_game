@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useGame } from "@/hooks/use-game";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Board } from "@/components/game/Board";
@@ -7,9 +8,31 @@ import { GameInfo } from "@/components/game/GameInfo";
 import { RestartDialog } from "@/components/game/RestartDialog";
 import { Chat } from "@/components/game/Chat";
 import { Toaster } from "@/components/ui/toaster";
+import { CallManager } from "@/components/game/CallManager";
 
 export default function GamePage() {
-  const { player, gameState, loading, handleMove, requestRestart, sendMessage } = useGame();
+  const { 
+    player, 
+    gameState, 
+    loading, 
+    handleMove, 
+    requestRestart, 
+    sendMessage,
+    callStatus,
+    remoteStream,
+    startCall,
+    answerCall,
+    declineCall,
+    endCall
+  } = useGame();
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    if (remoteStream && remoteAudioRef.current) {
+        remoteAudioRef.current.srcObject = remoteStream;
+    }
+  }, [remoteStream]);
+
 
   if (loading || !gameState || !player) {
     return (
@@ -35,7 +58,7 @@ export default function GamePage() {
   return (
     <>
       <main className="flex min-h-screen flex-col md:flex-row items-center md:items-start justify-center gap-4 md:gap-8 p-4 antialiased">
-        <div className="flex flex-col items-center justify-center gap-8 w-full max-w-md">
+        <div className="flex flex-col items-center justify-center gap-4 w-full max-w-md">
             <GameInfo gameState={gameState} player={player} />
             <Board 
                 board={gameState.board} 
@@ -44,7 +67,14 @@ export default function GamePage() {
                 winningCombo={typeof gameState.winner === 'object' && gameState.winner?.combo}
             />
         </div>
-        <div className="w-full max-w-md lg:max-w-sm h-[70vh] md:h-[calc(100vh-2rem)]">
+        <div className="w-full max-w-md lg:max-w-sm h-[70vh] md:h-[calc(100vh-2rem)] flex flex-col gap-2">
+            <CallManager 
+                callStatus={callStatus}
+                startCall={startCall}
+                answerCall={answerCall}
+                declineCall={declineCall}
+                endCall={endCall}
+            />
             <Chat 
                 player={player}
                 messages={gameState.chat}
@@ -59,6 +89,7 @@ export default function GamePage() {
         />
       </main>
       <Toaster />
+      <audio ref={remoteAudioRef} autoPlay playsInline />
     </>
   );
 }

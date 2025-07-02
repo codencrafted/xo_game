@@ -1,9 +1,8 @@
-
 "use client";
 
 import { useState, useRef, useEffect } from "react";
 import { formatDistanceToNow } from "date-fns";
-import { Mic, Send, Square, Volume2, Loader2 } from "lucide-react";
+import { Mic, Send, Square, Volume2, Loader2, Play, Pause } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,9 +18,42 @@ import { textToSpeech } from "@/ai/flows/tts-flow";
 
 interface ChatProps {
     player: Player;
-    messages?: ChatMessage[];
+    messages: ChatMessage[];
     onSendMessage: (type: 'text' | 'voice', content: string) => void;
 }
+
+const VoiceMessagePlayer = ({ src }: { src: string }) => {
+    const [isPlaying, setIsPlaying] = useState(false);
+    const audioRef = useRef<HTMLAudioElement | null>(null);
+
+    useEffect(() => {
+        audioRef.current = new Audio(src);
+        const currentAudio = audioRef.current;
+        currentAudio.onended = () => setIsPlaying(false);
+        
+        return () => {
+            currentAudio.pause();
+        };
+    }, [src]);
+
+    const togglePlay = () => {
+        if (isPlaying) {
+            audioRef.current?.pause();
+            setIsPlaying(false);
+        } else {
+            audioRef.current?.play().catch(e => console.error("Audio play failed:", e));
+            setIsPlaying(true);
+        }
+    };
+
+    return (
+        <Button onClick={togglePlay} variant="outline" size="sm" className="mt-2 text-left justify-start w-full">
+            {isPlaying ? <Pause className="mr-2 h-4 w-4" /> : <Play className="mr-2 h-4 w-4" />}
+            {isPlaying ? 'Pause' : 'Play Voice Message'}
+        </Button>
+    );
+};
+
 
 export function Chat({ player, messages = [], onSendMessage }: ChatProps) {
     const [textMessage, setTextMessage] = useState("");
@@ -145,7 +177,7 @@ export function Chat({ player, messages = [], onSendMessage }: ChatProps) {
                              )}>
                                 {msg.senderSymbol !== player.symbol && <MessageAvatar symbol={msg.senderSymbol} />}
                                 <div className={cn(
-                                    "max-w-xs rounded-lg p-3 text-sm",
+                                    "max-w-xs rounded-lg p-3 text-sm flex flex-col",
                                     msg.senderSymbol === player.symbol 
                                         ? "bg-primary text-primary-foreground" 
                                         : "bg-muted"
@@ -168,7 +200,7 @@ export function Chat({ player, messages = [], onSendMessage }: ChatProps) {
                                             </TooltipProvider>
                                        </div>
                                     ) : (
-                                        <audio controls src={msg.content} className="w-full h-10" />
+                                        <VoiceMessagePlayer src={msg.content} />
                                     )}
                                     <p className="text-xs opacity-70 mt-1 text-right">
                                         {msg.timestamp ? formatDistanceToNow(msg.timestamp.toDate(), { addSuffix: true }) : 'sending...'}

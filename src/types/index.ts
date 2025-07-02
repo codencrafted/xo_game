@@ -23,6 +23,13 @@ export type ChatMessage = {
     content: string; // text content or base64 audio data URI
 };
 
+export type CallData = {
+    from: Symbol;
+    offer: any; // RTCSessionDescriptionInit
+    answer?: any; // RTCSessionDescriptionInit
+    status: 'dialing' | 'ringing' | 'connected' | 'declined' | 'ended';
+};
+
 export interface GameState {
   board: BoardState;
   turn: Symbol;
@@ -30,4 +37,5 @@ export interface GameState {
   winner: Winner;
   restartRequested: { [key in Symbol]: boolean };
   chat: ChatMessage[];
+  call?: CallData | null;
 }

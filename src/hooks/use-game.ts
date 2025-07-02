@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { doc, onSnapshot, setDoc, getDoc, arrayUnion, Timestamp } from 'firebase/firestore';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import { 
+  doc, onSnapshot, setDoc, getDoc, arrayUnion, Timestamp,
+  collection, addDoc, onSnapshot as onCollectionSnapshot, writeBatch, getDocs,
+} from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 
 import { db } from '@/lib/firebase';
-import type { Player, GameState, Symbol, Winner, ChatMessage } from '@/types';
+import type { Player, GameState, Symbol, Winner, ChatMessage, CallData } from '@/types';
 
 const gameId = 'main-game';
 const gameDocRef = doc(db, 'games', gameId);
@@ -23,6 +26,14 @@ const initialGameState: GameState = {
   winner: null,
   restartRequested: { X: false, O: false },
   chat: [],
+  call: null,
+};
+
+const iceServers = {
+  iceServers: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+  ],
 };
 
 function checkWinner(board: (Symbol | null)[]): Winner {
@@ -44,6 +55,40 @@ export function useGame() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
+  // WebRTC state
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [callStatus, setCallStatus] = useState<'idle' | 'dialing' | 'ringing' | 'connected'>('idle');
+
+  const setupPeerConnection = useCallback(async () => {
+    if (peerConnectionRef.current || !player) return peerConnectionRef.current;
+    
+    const pc = new RTCPeerConnection(iceServers);
+    peerConnectionRef.current = pc;
+
+    // Get local media
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    localStreamRef.current = stream;
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+    // Handle remote stream
+    pc.ontrack = (event) => {
+        setRemoteStream(event.streams[0]);
+    };
+
+    // Handle ICE candidates
+    const localCandidatesCol = collection(db, 'games', gameId, `iceCandidates${player.symbol}`);
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            addDoc(localCandidatesCol, event.candidate.toJSON());
+        }
+    };
+    
+    return pc;
+  }, [player]);
+
+  // Main game state listener
   useEffect(() => {
     const playerDataString = localStorage.getItem('tic-tac-toe-player');
     if (!playerDataString) {
@@ -60,12 +105,29 @@ export function useGame() {
         
         if (data.restartRequested.X && data.restartRequested.O) {
             if(currentPlayer?.symbol === 'X') {
-                await setDoc(gameDocRef, {
-                    ...initialGameState,
-                    players: data.players
-                });
+                await setDoc(gameDocRef, { ...initialGameState, players: data.players });
             }
         }
+        
+        // Handle call state from Firestore
+        if (data.call) {
+          const { status, from, answer } = data.call;
+          if (status === 'ringing' && from !== currentPlayer.symbol) {
+            setCallStatus('ringing');
+          } else if (status === 'ringing' && from === currentPlayer.symbol) {
+            setCallStatus('dialing');
+          } else if (status === 'connected') {
+            setCallStatus('connected');
+            if (answer && peerConnectionRef.current && !peerConnectionRef.current.currentRemoteDescription) {
+              await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(answer));
+            }
+          } else if (status === 'declined' || status === 'ended') {
+            if(callStatus !== 'idle') cleanupCall(false);
+          }
+        } else {
+            if(callStatus !== 'idle') cleanupCall(false);
+        }
+
       } else {
         await setDoc(gameDocRef, initialGameState);
         setGameState(initialGameState);
@@ -74,7 +136,80 @@ export function useGame() {
     });
 
     return () => unsubscribe();
-  }, [router]);
+  }, [router, callStatus]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Listen for remote ICE candidates
+  useEffect(() => {
+    if (!peerConnectionRef.current || !player) return;
+    const otherPlayerSymbol = player.symbol === 'X' ? 'O' : 'X';
+    const remoteCandidatesCol = collection(db, 'games', gameId, `iceCandidates${otherPlayerSymbol}`);
+    const unsubscribe = onCollectionSnapshot(remoteCandidatesCol, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+            if (change.type === 'added') {
+                const candidate = new RTCIceCandidate(change.doc.data());
+                peerConnectionRef.current?.addIceCandidate(candidate);
+            }
+        });
+    });
+    return unsubscribe;
+  }, [player]);
+
+  const cleanupCall = useCallback(async (notifyFirestore: boolean) => {
+    peerConnectionRef.current?.close();
+    localStreamRef.current?.getTracks().forEach(track => track.stop());
+    peerConnectionRef.current = null;
+    localStreamRef.current = null;
+    setRemoteStream(null);
+    setCallStatus('idle');
+
+    if (notifyFirestore && player?.symbol === 'X') { // Only one player cleans up Firestore
+        await setDoc(gameDocRef, { call: null }, { merge: true });
+        const batch = writeBatch(db);
+        const candidatesXSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesX'));
+        candidatesXSnap.forEach(doc => batch.delete(doc.ref));
+        const candidatesOSnap = await getDocs(collection(db, 'games', gameId, 'iceCandidatesO'));
+        candidatesOSnap.forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+    }
+  }, [player]);
+
+  const startCall = useCallback(async () => {
+    if (!player) return;
+    const pc = await setupPeerConnection();
+    if (!pc) return;
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const callData: CallData = { from: player.symbol, offer, status: 'ringing' };
+    await setDoc(gameDocRef, { call: callData }, { merge: true });
+  }, [player, setupPeerConnection]);
+
+  const answerCall = useCallback(async () => {
+    if (!gameState?.call?.offer || !player) return;
+    const pc = await setupPeerConnection();
+    if (!pc) return;
+    
+    await pc.setRemoteDescription(new RTCSessionDescription(gameState.call.offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+
+    const callData: CallData = { ...gameState.call, answer, status: 'connected' };
+    await setDoc(gameDocRef, { call: callData }, { merge: true });
+  }, [gameState, player, setupPeerConnection]);
+  
+  const endCall = useCallback(async () => {
+      await cleanupCall(true);
+  }, [cleanupCall]);
+  
+  const declineCall = useCallback(async () => {
+      if (!gameState?.call) return;
+      const callData: CallData = { ...gameState.call, status: 'declined' };
+      await setDoc(gameDocRef, { call: callData }, { merge: true });
+      setTimeout(() => { // Allow declined state to sync
+        if (player?.symbol === gameState.call?.from) {
+          endCall();
+        }
+      }, 1500);
+  }, [gameState, player, endCall]);
 
   const handleMove = useCallback(async (index: number) => {
     if (!gameState || !player || gameState.winner) return;
@@ -110,11 +245,11 @@ export function useGame() {
     await setDoc(gameDocRef, {
         chat: arrayUnion({
             ...newMessage,
-            id: new Date().toISOString(), // Simple unique ID
+            id: new Date().toISOString() + Math.random(),
             timestamp: Timestamp.now(),
         })
     }, { merge: true });
   }, [player]);
 
-  return { player, gameState, loading, handleMove, requestRestart, sendMessage };
+  return { player, gameState, loading, handleMove, requestRestart, sendMessage, callStatus, remoteStream, startCall, answerCall, declineCall, endCall };
 }
